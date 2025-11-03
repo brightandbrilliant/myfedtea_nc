@@ -19,7 +19,7 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 
-def split_client_data(data, val_ratio=0.1, test_ratio=0.1, device='cpu'):
+def split_client_data(data, val_ratio=0.2, test_ratio=0.2, device='cpu'):
     """
     【修改为】节点分类任务的数据划分：生成 train_mask, val_mask, test_mask。
 

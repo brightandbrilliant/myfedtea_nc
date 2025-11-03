@@ -222,10 +222,7 @@ def Cluster_and_Align(clients, anchor_config, nClusters, top_percent, device):
             print(f"--- Discovering Anchors and Aligning: Client {i} -> Client {j} ---")
 
             # 2a. 动态锚点挖掘 (服务器端)
-            min_anchors = discover_mnn_anchors(z_i, z_j,
-                                               top_k=anchor_config['top_k'],
-                                               metric=anchor_config['metric'],
-                                               threshold=anchor_config['threshold'])
+            min_anchors = discover_mnn_anchors(z_i, z_j, metric=anchor_config['metric'])
 
             if not min_anchors:
                 node_alignments[(i, j)] = {}
@@ -279,13 +276,11 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     pretrain_rounds = 50
     align_update_interval = 150  # 重新聚类和对齐的间隔
-    start_rnd = 201  # 从预训练结束后的下一轮开始增强
+    start_rnd = 1
 
     anchor_config = {
-        'top_k': 1,
         'metric': 'cosine',
-        'threshold': None,
-        'min_count': 10
+        'min_count': 30,
     }
 
     print("==================Pretraining Start==================")

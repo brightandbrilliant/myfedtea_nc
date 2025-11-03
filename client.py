@@ -48,7 +48,7 @@ class Client:
         # 原始训练集掩码
         raw_train_mask = self.data.train_mask
 
-        # --- [修改点 1] 过滤掉训练集中的负标签 (-1) ---
+        # --- [标签过滤] 过滤掉训练集中的负标签 (-1) ---
         valid_labels_mask = (self.data.y >= 0)
 
         # 最终的有效训练掩码
@@ -63,10 +63,9 @@ class Client:
         # 节点分类损失
         loss_local = self.criterion(pred_logits, labels)
 
-        # --- L_reg (Encoder 和 Classifier 的联合正则项) 计算 (不变) ---
+        # --- L_reg (Encoder 和 Classifier 的联合正则项) 计算 ---
         loss_reg = 0.0
         if self.mu > 0 and self.last_encoder_state and self.last_classifier_state:
-            # ... (L_reg 计算代码不变)
             # Encoder 正则化
             for name, param in self.encoder.named_parameters():
                 global_param = self.last_encoder_state[name].to(param.device)
@@ -92,7 +91,54 @@ class Client:
 
         return loss.item()
 
-    # ... (train_on_augmented_nodes 方法不变，因为注入的标签 Y_aug 已经被 main.py 强制转为 long 类型)
+    # -------------------------------------------------------------------
+    # 针对新框架新增/修改的方法
+    # -------------------------------------------------------------------
+
+    def train_on_augmented_nodes(self):
+        """增强训练：仅在注入的跨图节点数据上训练 (L = L_aug)，加入标签过滤。"""
+        if self.augmented_node_data is None:
+            return 0.0
+
+        # 增强训练通常只更新分类头 (Classifier)
+        self.encoder.eval()
+        self.classifier.train()
+        self.optimizer.zero_grad()
+
+        # 增强数据部分
+        z_aug_raw, y_aug_raw = self.augmented_node_data
+
+        # --- [标签过滤] 过滤掉增强数据中的负标签 (-1) ---
+        valid_indices = (y_aug_raw >= 0).squeeze()
+
+        if valid_indices.sum().item() == 0:
+            self.clear_augmented_data()
+            return 0.0
+
+        z_aug = z_aug_raw[valid_indices]
+        y_aug = y_aug_raw[valid_indices]
+
+        # 使用当前 classifier 进行预测
+        pred_logits_aug = self.classifier(z_aug)
+
+        # 计算增强损失
+        loss_aug = self.criterion(pred_logits_aug, y_aug)
+
+        # 总损失 = 增强损失 * 权重
+        loss = self.augment_weight * loss_aug
+
+        loss.backward()
+        # 只裁剪 classifier 的梯度
+        torch.nn.utils.clip_grad_norm_(
+            list(self.classifier.parameters()),
+            self.max_grad_norm
+        )
+        self.optimizer.step()
+
+        # 清理增强数据
+        self.clear_augmented_data()
+
+        return loss.item()
 
     def analyze_prediction_errors_by_cluster(self, cluster_labels):
         """
@@ -108,7 +154,7 @@ class Client:
 
             raw_mask = self.data.val_mask
 
-            # --- [修改点 2] 过滤掉验证集中的负标签 ---
+            # --- [标签过滤] 过滤掉验证集中的负标签 ---
             valid_labels_mask = (self.data.y >= 0)
             final_mask = raw_mask & valid_labels_mask
 
@@ -124,8 +170,18 @@ class Client:
             error_mask_local = (predicted_labels != true_labels)
 
             # 映射回全局节点索引
+            # squeeze() 确保 torch.nonzero 返回一个一维张量
             all_nodes_indices = torch.nonzero(final_mask, as_tuple=False).squeeze()
-            error_nodes_indices = all_nodes_indices[error_mask_local].tolist()
+
+            # 处理 all_nodes_indices 为空或只包含一个元素的情况
+            if all_nodes_indices.ndim == 0 and all_nodes_indices.numel() == 1:
+                # 只有一个元素时，需要特殊处理索引
+                error_nodes_indices = all_nodes_indices[
+                    error_mask_local.item()].tolist() if error_mask_local.item() else []
+            elif all_nodes_indices.numel() > 0:
+                error_nodes_indices = all_nodes_indices[error_mask_local].tolist()
+            else:
+                error_nodes_indices = []
 
             # 统计错误节点所属的聚类类别
             for node_idx in error_nodes_indices:
@@ -151,7 +207,7 @@ class Client:
 
             raw_mask = self.data.test_mask if use_test else self.data.val_mask
 
-            # --- [修改点 3] 过滤掉评估集中的负标签 ---
+            # --- [标签过滤] 过滤掉评估集中的负标签 ---
             valid_labels_mask = (self.data.y >= 0)
             final_mask = raw_mask & valid_labels_mask
 
@@ -173,8 +229,6 @@ class Client:
 
         return acc
 
-    # ... (其他注入/清除/状态管理方法不变)
-
     def inject_augmented_node_data(self, augmented_z: torch.Tensor, augmented_y: torch.Tensor):
         """注入增强节点嵌入和标签"""
         if augmented_z is not None and augmented_y is not None:
@@ -188,10 +242,15 @@ class Client:
         """清除注入的增强数据"""
         self.augmented_node_data = None
 
+    # -------------------------------------------------------------------
+    # 状态管理方法 (已修正)
+    # -------------------------------------------------------------------
+
     def get_encoder_state(self):
         return self.encoder.state_dict()
 
     def get_classifier_state(self):
+        # 修正了参数列表，确保与 main.py 中的调用一致
         return self.classifier.state_dict()
 
     def set_encoder_state(self, state_dict):

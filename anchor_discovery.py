@@ -41,64 +41,62 @@ def compute_distance_matrix(Z1: torch.Tensor, Z2: torch.Tensor, metric='cosine')
         raise ValueError("Unsupported distance metric.")
 
 
-def discover_mnn_anchors(Z1: torch.Tensor, Z2: torch.Tensor, top_k=1, metric='cosine', threshold=None):
+def discover_mnn_anchors(Z1: torch.Tensor, Z2: torch.Tensor, metric='cosine', TOP_PERCENTILE = 0.30):
     """
-    通过互为最近邻 (MNN) 算法挖掘锚点对。
+    通过最近邻距离百分位数 (30%) 挖掘锚点对。
+
+    对于 Z1 中的每个点 i，找到 Z2 中离它最近的点 j_nn。
+    如果距离 D(i, j_nn) 在所有 D(i, j_nn) 构成的集合中属于前 30% 最短距离，
+    则将 (i, j_nn) 视为锚点对。
 
     Args:
         Z1, Z2 (torch.Tensor): 客户端嵌入。
-        top_k (int): 考虑的最近邻数量。
-        metric (str): 距离度量。
-        threshold (float): 可选的距离阈值。
+        metric (str): 距离度量（例如 'cosine'）。
 
     Returns:
         list: 锚点对列表 [[idx1, idx2], ...]。
     """
+
     N1 = Z1.shape[0]
-    N2 = Z2.shape[0]
+
+    if N1 == 0 or Z2.shape[0] == 0:
+        print("警告: 客户端嵌入为空，未发现锚点。")
+        return []
 
     # 1. 计算距离矩阵 (N1 x N2)
     D = compute_distance_matrix(Z1, Z2, metric)
 
+    # 2. 找到 Z1 中每个节点到 Z2 的最近邻 (最近邻距离和索引)
+    # 沿 dim=1 寻找最小值 (即每一行)，返回的索引是 Z2 的索引 j
+    # min_dist_1_to_2 形状: (N1,) - Z1 中每个点的最近距离
+    # indices_1_to_2 形状: (N1,) - Z2 中对应的最近邻索引 j
+    min_dist_1_to_2, indices_1_to_2 = torch.min(D, dim=1)
+
+    # 3. 计算距离阈值
+
+    # 将所有 N1 个最近距离拉平，找到 TOP_PERCENTILE 对应的距离值
+    # 即：30% 的 Z1 节点能找到比这个阈值更近的最近邻。
+    threshold_value = torch.quantile(min_dist_1_to_2, q=TOP_PERCENTILE).item()
+
+    # 4. 过滤锚点对
+
+    # 找到所有距离小于或等于阈值的 Z1 节点索引 i
+    # 形状: (N_anchors,)
+    filtered_indices_i = torch.nonzero(min_dist_1_to_2 <= threshold_value, as_tuple=True)[0]
+
+    # 提取这些被选中的 i 对应的 Z2 最近邻索引 j
+    filtered_indices_j = indices_1_to_2[filtered_indices_i]
+
+    # 5. 构造锚点对列表
     anchors = []
+    if filtered_indices_i.numel() > 0:
+        # 锚点对 [idx1, idx2]
+        anchors_tensor = torch.stack([filtered_indices_i, filtered_indices_j], dim=1)
+        anchors = anchors_tensor.tolist()
 
-    # 2. 找到 Z1 中每个节点到 Z2 的最近邻
-    # torch.topk 默认找最大值，因此对于距离 (Diff)，我们需要找最小值
-    # 返回: [最小值，索引]
-    min_dist_1_to_2, indices_1_to_2 = torch.topk(D, k=top_k, dim=1, largest=False)
-
-    # 3. 找到 Z2 中每个节点到 Z1 的最近邻
-    # 沿 dim=0 寻找 (即每一列)，返回的索引是 Z1 的索引
-    min_dist_2_to_1, indices_2_to_1 = torch.topk(D, k=top_k, dim=0, largest=False)
-
-    # 4. 寻找 MNN
-
-    # 遍历客户端 1 的每个节点 i
-    for i in range(N1):
-        # i 在 Z2 中的 k 个最近邻 (索引 j)
-        nn_j_from_i = indices_1_to_2[i].tolist()
-
-        for j in nn_j_from_i:
-            # 检查 j 是否在 Z1 中的 k 个最近邻包含 i
-
-            # j 在 Z1 中的 k 个最近邻 (索引 i')
-            nn_i_from_j = indices_2_to_1[:, j].tolist()
-
-            if i in nn_i_from_j:
-                # 互为最近邻 (i <-> j)
-
-                # 检查距离阈值 (可选)
-                current_dist = D[i, j].item()
-                if threshold is not None and current_dist > threshold:
-                    continue
-
-                # 确保锚点只被添加一次
-                anchor_pair = [i, j]
-                if anchor_pair not in anchors:
-                    anchors.append(anchor_pair)
-
-    # 5. 返回锚点对
-    print(f"Discovered {len(anchors)} MNN anchors.")
+    # 6. 返回结果
+    print(f"Discovered {len(anchors)} nearest-neighbor anchors (Top {int(TOP_PERCENTILE * 100)}% by distance).")
+    print(f"Used distance threshold: {threshold_value:.4f}.")
     return anchors
 
 
