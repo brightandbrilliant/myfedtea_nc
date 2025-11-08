@@ -63,6 +63,9 @@ def discover_mnn_anchors(Z1: torch.Tensor, Z2: torch.Tensor, metric='cosine', TO
         print("警告: 客户端嵌入为空，未发现锚点。")
         return []
 
+    Z1 = Z1.to(torch.float64)
+    Z2 = Z2.to(torch.float64)
+
     # 1. 计算距离矩阵 (N1 x N2)
     D = compute_distance_matrix(Z1, Z2, metric)
 

@@ -16,6 +16,7 @@ from cluster import (
 # 动态锚点挖掘导入
 from anchor_discovery import discover_mnn_anchors, compute_anchor_list_with_diff
 from utils import set_seed, split_client_data
+from prism import adaptive_cluster_selection
 
 
 # --- 辅助函数：错误聚合 ---
@@ -195,11 +196,13 @@ def Cluster_and_Align(clients, anchor_config, nClusters, top_percent, device):
     num_clients = len(clients)
     cluster_labels = []
     all_z = []
+    k_list = (2, 15)
 
     print("==================Clustering Start==================")
     # 1. 聚类并提取 GNN 嵌入
     for client in clients:
-        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
+        best_k, niid_ixd = adaptive_cluster_selection(client.data, client.encoder, k_list, device)
+        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=best_k, device=device)
         cluster_labels.append(labels)
 
         client.encoder.eval()
