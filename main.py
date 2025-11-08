@@ -156,7 +156,7 @@ def Cluster_and_Align(clients, anchor_config, top_percent, device):
     print("================== Clustering Start ==================")
     for client in clients:
         best_k, niid_idx = adaptive_cluster_selection(client.data, client.encoder, k_list, device)
-        print(f"[Client {client.client_id}] Best_K={best_k}, NID={niid_idx:.4f}")
+        print(f"[Client {client.client_id}] Best_K={best_k}, NID={niid_idx}")
         labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=best_k, device=device)
         cluster_labels.append(labels)
         with torch.no_grad():
