@@ -30,6 +30,38 @@ def average_state_dicts(state_dicts):
     return avg_state
 
 
+def extract_augmented_node_data(target_client, source_client, error_cluster_counts,
+                                cluster_labels_source, node_alignment, top_k_per_type=100):
+    """
+    基于目标客户端的错误类别和对齐矩阵，从 source_client 提取增强知识。
+    """
+    source_client.encoder.eval()
+    with torch.no_grad():
+        z_j = source_client.encoder(source_client.data.x, source_client.data.edge_index).detach()
+        y_j = source_client.data.y.detach()
+
+    all_augmented_z, all_augmented_y = [], []
+
+    for c_i, _ in error_cluster_counts.items():
+        aligned_targets = node_alignment.get(c_i, [])
+        for c_j, weight in aligned_targets:
+            nodes_c_j = np.where(cluster_labels_source == c_j)[0].tolist()
+            if not nodes_c_j:
+                continue
+            num_to_select = int(top_k_per_type * weight)
+            random.shuffle(nodes_c_j)
+            selected_indices = nodes_c_j[:max(1, num_to_select)]
+            idx_tensor = torch.tensor(selected_indices, dtype=torch.long, device=z_j.device)
+            all_augmented_z.append(z_j[idx_tensor])
+            all_augmented_y.append(y_j[idx_tensor])
+
+    if not all_augmented_z:
+        return None, None
+
+    final_z = torch.cat(all_augmented_z, dim=0)
+    final_y = torch.cat(all_augmented_y, dim=0)
+    return final_z, final_y.long()
+
 def evaluate_all_clients(clients, use_test=False):
     accs = []
     for client in clients:
@@ -170,6 +202,7 @@ if __name__ == "__main__":
     enhance_interval = 10
     align_update_interval = 150
     record_interval = 10
+    top_k_node_per_type = 20
 
     anchor_config = {"metric": "cosine", "min_count": 25}
 
@@ -219,31 +252,45 @@ if __name__ == "__main__":
                 )
 
             if rnd % enhance_interval == 0:
-                for i, client in enumerate(clients):
-                    err = client.analyze_prediction_errors_by_cluster(cluster_labels[i])
-                    sliding_error_window[i].append(err)
+                for i in range(NUM_CLIENTS):
+                    client = clients[i]
+                    error_counts = client.analyze_prediction_errors_by_cluster(cluster_labels[i])
+                    sliding_error_window[i].append(error_counts)
 
-                for i, target in enumerate(clients):
-                    agg = defaultdict(int)
+                for i in range(NUM_CLIENTS):
+                    target_client = clients[i]
+
+                    # 聚合滑动窗口中的错误
+                    aggregated_errors = defaultdict(int)
                     for d in sliding_error_window[i]:
                         for k, v in d.items():
-                            agg[k] += v
+                            aggregated_errors[k] += v
 
-                    Zs, Ys = [], []
-                    for j, src in enumerate(clients):
+                    all_Z_aug_from_j, all_Y_aug_from_j = [], []
+
+                    for j in range(NUM_CLIENTS):
                         if i == j:
                             continue
-                        align = node_alignments.get((i, j), {})
-                        Zj, Yj = src.extract_augmented_node_data(
-                            agg, cluster_labels[j], align
-                        )
-                        if Zj is not None:
-                            Zs.append(Zj)
-                            Ys.append(Yj)
 
-                    if Zs:
-                        target.inject_augmented_node_data(
-                            torch.cat(Zs), torch.cat(Ys)
+                        alignment_i_to_j = node_alignments.get((i, j), {})
+
+                        Z_aug_j, Y_aug_j = extract_augmented_node_data(
+                            target_client=target_client,
+                            source_client=clients[j],
+                            error_cluster_counts=aggregated_errors,
+                            cluster_labels_source=cluster_labels[j],
+                            node_alignment=alignment_i_to_j,
+                            top_k_per_type=top_k_node_per_type
+                        )
+
+                        if Z_aug_j is not None:
+                            all_Z_aug_from_j.append(Z_aug_j)
+                            all_Y_aug_from_j.append(Y_aug_j)
+
+                    if all_Z_aug_from_j:
+                        target_client.inject_augmented_node_data(
+                            torch.cat(all_Z_aug_from_j, dim=0),
+                            torch.cat(all_Y_aug_from_j, dim=0)
                         )
 
             cls_states = []
