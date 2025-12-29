@@ -8,7 +8,7 @@ class Client:
     def __init__(self, client_id, data, encoder, classifier, device='cpu', lr=0.005,
                  weight_decay=1e-4, max_grad_norm=30000.0,
                  # 引入增强损失权重
-                 augment_weight=0.2, mu=0.01):
+                 augment_weight=0.3, mu=0.0):
 
         self.client_id = client_id
         # 节点分类数据包含 x, edge_index, y, train/val/test_mask

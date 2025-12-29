@@ -207,12 +207,12 @@ def Cluster_and_Align(clients, anchor_config, top_percent, device):
 # 主函数
 # ============================================================
 if __name__ == "__main__":
-    seed_ = 826
+    seed_ = 62
     set_seed(seed_)
 
-    data_dir = "parsed_dataset/cs"
+    data_dir = "parsed_dataset/cr_10"
     pyg_data_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pt")])
-    NUM_CLASSES = 6
+    NUM_CLASSES = 7
     NUM_CLIENTS = len(pyg_data_files)
 
     encoder_params = {
@@ -222,7 +222,7 @@ if __name__ == "__main__":
         'num_layers': 3,
         'dropout': 0.5
     }
-    classifier_params = {'hidden_dim': 128, 'num_layers': 2, 'dropout': 0.3}
+    classifier_params = {'hidden_dim': 128, 'num_layers': 3, 'dropout': 0.3}
     training_params = {'lr': 0.001, 'weight_decay': 1e-4, 'local_epochs': 5}
 
     num_rounds = 700
@@ -235,7 +235,7 @@ if __name__ == "__main__":
 
     anchor_config = {
         'metric': 'cosine',
-        'min_count': 30,
+        'min_count': 25,
     }
 
     print("================== Pretraining Start ==================")
