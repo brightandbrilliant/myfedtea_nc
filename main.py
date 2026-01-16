@@ -15,7 +15,7 @@ from cluster import (
 )
 from anchor_discovery import discover_mnn_anchors, compute_anchor_list_with_diff
 from utils import set_seed, split_client_data
-from prism import adaptive_cluster_selection
+from prism import adaptive_cluster_selection, adaptive_cluster_selection_silhouette
 
 
 # ============================================================
@@ -156,6 +156,9 @@ def Cluster_and_Align(clients, anchor_config, top_percent, device):
     print("================== Clustering Start ==================")
     for client in clients:
         best_k, niid_idx = adaptive_cluster_selection(client.data, client.encoder, k_list, device)
+        # best_k, niid_idx, _, sils = adaptive_cluster_selection_silhouette(
+        #     client.data, client.encoder, k_list, device
+        # )
         print(f"[Client {client.client_id}] Best_K={best_k}, NID={niid_idx}")
         labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=best_k, device=device)
         cluster_labels.append(labels)
@@ -247,7 +250,7 @@ if __name__ == "__main__":
     # 初始化
     best_acc = -1
     best_encoder_state = None
-    best_classifier_state = None
+    best_classifier_states = None
     best_rnd = 0
     sliding_error_window = [deque(maxlen=5) for _ in range(NUM_CLIENTS)]
 
@@ -310,26 +313,28 @@ if __name__ == "__main__":
 
         encoder_states = [client.get_encoder_state() for client in clients]
         global_encoder_state = average_state_dicts(encoder_states)
-        global_classifier_state = average_state_dicts(classifier_states_local)
 
         for client in clients:
             client.set_encoder_state(global_encoder_state)
-            client.set_classifier_state(global_classifier_state)
             client.last_encoder_state = {k: v.cpu().clone() for k, v in global_encoder_state.items()}
-            client.last_classifier_state = {k: v.cpu().clone() for k, v in global_classifier_state.items()}
+            client.last_classifier_state = {k: v.cpu().clone()
+                                            for k, v in client.get_classifier_state().items()}
 
         avg_acc = evaluate_all_clients(clients, use_test=True)
         if avg_acc > best_acc:
             best_acc = avg_acc
             best_encoder_state = {k: v.clone().detach() for k, v in global_encoder_state.items()}
-            best_classifier_state = {k: v.clone().detach() for k, v in global_classifier_state.items()}
+            best_classifier_states = [
+                {k: v.clone().detach() for k, v in client.get_classifier_state().items()}
+                for client in clients
+            ]
             best_rnd = rnd
             print("===> New best model saved")
 
     print("\n================ Federated Training Finished ================")
     for i, client in enumerate(clients):
         client.set_encoder_state(best_encoder_state)
-        client.set_classifier_state(best_classifier_state)
+        client.set_classifier_state(best_classifier_states[i])
 
     print("\n================ Final Evaluation ================")
     final_avg_acc = evaluate_all_clients(clients, use_test=True)

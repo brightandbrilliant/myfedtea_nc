@@ -184,3 +184,51 @@ def adaptive_cluster_selection(data, encoder, k_range, device='cpu', method="elb
     best_K = select_optimal_k(nid_results, method)
     print(f"[Adaptive Clustering] Best K determined by NID: {best_K}")
     return best_K, nid_results
+
+
+from sklearn.metrics import silhouette_score
+
+
+# ===============================================================
+# 7️⃣ adaptive_cluster_selection_silhouette (For Comparison)
+# ===============================================================
+def adaptive_cluster_selection_silhouette(data, encoder, k_range, device='cpu'):
+    """
+    使用传统的轮廓系数（Silhouette Score）来选择最优 K。
+    轮廓系数范围为 [-1, 1]，越接近 1 说明聚类效果越好。
+    """
+    encoder.eval()
+    data = data.to(device)
+    with torch.no_grad():
+        z = encoder(data.x, data.edge_index).detach().cpu().numpy()
+
+    best_K = k_range[0]
+    best_score = -1.0
+    silhouette_results = {}
+
+    print("\n[Comparison] Evaluating Silhouette Score across K values...")
+    for k in k_range:
+        # 使用你已有的 kmeans 聚类函数获取标签
+        labels, _ = gnn_embedding_kmeans_cluster(data, encoder, n_clusters=k, device=device)
+        labels = labels.cpu().numpy() if torch.is_tensor(labels) else labels
+
+        # 计算轮廓系数
+        # 注意：轮廓系数在样本量极大时计算较慢，KDD 常用数据集建议使用采样或直接计算
+        score = silhouette_score(z, labels)
+        silhouette_results[k] = score
+        print(f"[Silhouette] K={k}, Score={score:.4f}")
+
+        if score > best_score:
+            best_score = score
+            best_K = k
+
+    print(f"[Silhouette] Best K determined by Silhouette: {best_K}")
+
+    # 为了绘图对比，我们返回结果
+    Ks = sorted(silhouette_results.keys())
+    Scores = [silhouette_results[k] for k in Ks]
+
+    return best_K, best_score, Ks, Scores
+
+
+
